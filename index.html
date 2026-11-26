@@ -2651,7 +2651,7 @@ var HanziWriter=function(){"use strict";var t,e,r;const i="undefined"==typeof wi
 </script>
 
   <script>
-/* Giao diện web app học tiếng Trung — bản 2.0 */
+/* Giao diện web app học tiếng Trung — bản 2.1 */
 var APP = { wordStack: [], wordFrom: null, group: null, wordsMode: 'browse', browseDim: 'topic', core: null, db: null, view: 'today', pending: [], flushing: false, q: null, qi: 0,
   cur: null, shownAt: 0, revealed: false, check: null, peeked: false, undo: null, wordId: null, search: '', inbox: null,
   mediaCache: {} };
@@ -2727,7 +2727,7 @@ function call(fn) {
   var args = Array.prototype.slice.call(arguments, 1), t0 = Date.now();
   return (GAS ? gasCall(fn, args) : apiCall(fn, args)).then(function (o) {
     var t1 = Date.now() - t0;
-    if (fn !== 'saveDiagnostics' && (t1 > 2000 || o.size > 200000 || o.parse > 150)) diag('server', fn + ' ' + t1 + 'ms, ' + Math.round(o.size / 1024) + 'KB, parse ' + o.parse + 'ms');
+    if (fn !== 'saveDiagnostics' && (t1 > 15000 || o.parse > 500)) diag('server', fn + ' ' + t1 + 'ms, ' + Math.round(o.size / 1024) + 'KB, parse ' + o.parse + 'ms');
     return o.res;
   }, function (e) {
     var msg = e && e.message || String(e);
@@ -2808,12 +2808,9 @@ var TAP_GUARD_MS = 400, layoutAt = 0, lastH = window.innerHeight;
 function markLayout(why) { layoutAt = Date.now(); }
 function onViewportChange() {
   var h = window.visualViewport ? window.visualViewport.height : window.innerHeight;
-  if (Math.abs(h - lastH) > 60) diag('keyboard', (h < lastH ? 'open ' : 'close ') + Math.round(lastH) + '→' + Math.round(h));
   lastH = h; markLayout();
 }
 window.addEventListener('resize', onViewportChange);
-document.addEventListener('focusin', function (e) { if (/INPUT|TEXTAREA/.test(e.target.tagName) && TOUCH) { diag('keyboard', 'focus'); } });
-document.addEventListener('focusout', function (e) { if (/INPUT|TEXTAREA/.test(e.target.tagName) && TOUCH) { diag('keyboard', 'blur'); } });
 if (window.visualViewport) window.visualViewport.addEventListener('resize', onViewportChange);
 document.addEventListener('click', function (e) {
   if (!TOUCH || Date.now() - layoutAt >= TAP_GUARD_MS) return;
@@ -2970,7 +2967,7 @@ function load(keepView) {
     }).catch(function () {});
   }
   return call('getBootstrap').then(function (db) {
-    if (db && db.serverMs && db.serverMs.total > 3000) diag('server-time', JSON.stringify(db.serverMs));
+    if (db && db.serverMs && db.serverMs.total > 15000) diag('server-time', JSON.stringify(db.serverMs));
     if (!GAS) idbSet('boot', db).catch(function () {});
     // ratings were made while this was loading, or a review session runs on the device copy: refresh later
     if ((APP.lastRateAt && APP.lastRateAt > t0) || (APP.db && APP.view === 'review')) { APP.needReload = true; return; }
@@ -3184,7 +3181,8 @@ function viewToday() {
         (i < p.suggestToday ? ' checked' : '') + '> <span class="zh" style="font-size:22px">' + esc(s.han) + '</span> <span class="grow small">' +
         meaning(s) + '</span><span class="small muted">' + esc(s.lvl || w.h25 || '') + (s._wait >= 7 ? ' · ' + s._wait + 'd' : '') + '</span></label>';
     });
-    h += '<button class="btn primary" onclick="openSelected()">' + L('打开所选', 'Open selected', 'Mở các nghĩa đã chọn') + '</button>';
+    h += '<button class="btn primary" onclick="openSelected()">' + L('打开所选', 'Open selected', 'Mở các nghĩa đã chọn') + '</button> ' +
+      '<button class="btn" onclick="knowSelected()">' + L('已会', 'Already know', 'Đã biết') + '</button>';
   } else {
     h += '<p class="muted small">' + L('没有待开的义项', 'Nothing waiting', 'Kho chưa có nghĩa nào chờ mở') + '</p>';
   }
@@ -3451,6 +3449,9 @@ function verdict(c, it) {
     } else if (k.variant) {
       h += '<div class="vd zh"><span class="vl">你写</span> ' + esc(k.typed) + ' <span class="small">= ' + esc(k.expect) + ' · ' +
         esc(LT('同义变体', 'variant', 'biến thể, dùng thay nhau được')) + '</span></div>';
+    } else if (k.synonym) {
+      h += '<div class="vd zh"><span class="vl">你写</span> ' + esc(k.typed) + ' <span class="small">≈ ' + esc(LT('同组词，算对', 'same meaning group — counted correct', 'cùng nhóm nghĩa — tính đúng')) + '</span></div>' +
+        '<div class="vd zh"><span class="vl">本卡</span> <span class="c-ok">' + esc(String(k.expect).split(/[\/／]/)[0]) + '</span></div>';
     } else if (k.override) {
       h += '<div class="vd small">' + esc(LT('你标记为正确，已发给 Claude 核对', 'Marked correct; sent to Claude to check', 'Bạn đã đánh dấu là đúng — đã gửi Claude kiểm tra để bổ sung nhóm nghĩa')) + '</div>';
     } else if (!k.ok && !k.partial) {
@@ -3538,7 +3539,12 @@ function checkAnswer() {
       if (APP.retry) logEvent({ cardId: c.id, type: c.type, expect: expect, typed: typed, result: 'đúng ở lần 2' });
       return reveal();
     }
-    if ((r.res === 'group' || r.res === 'near' || r.res === 'dict') && !APP.retry) {
+    if (r.res === 'group') {
+      APP.check = { kind: 'han', typed: typed, expect: expect, ok: true, synonym: true, retried: APP.retry && APP.retry.typed };
+      logEvent({ cardId: c.id, type: c.type, expect: expect, typed: typed, result: 'đúng · cùng nhóm', note: r.g || '' });
+      return reveal();
+    }
+    if ((r.res === 'near' || r.res === 'dict') && !APP.retry) {
       APP.retry = { typed: normHan(typed), r: r };
       logEvent({ cardId: c.id, type: c.type, expect: expect, typed: typed, result: 'thử lại · ' + r.res, note: r.g || '' });
       if (r.res !== 'group') suggestGroup(sense, normHan(typed), r.res === 'dict' ? 'từ điển HSK' : 'nghĩa gần trong kho');
@@ -3703,6 +3709,11 @@ function altWordCheck() {
   judgeHan(typed, it.han, it, function (r) {
     if (r.res === 'ok') return toast(LT('就是这个词，写吧', 'That is the word — write it', 'Đúng từ đó rồi, viết đi'));
     if (r.res === 'wrong') return toast(LT('不是同组词，继续写', 'Not in the same meaning group — keep writing', 'Từ này không cùng nhóm nghĩa với thẻ — viết tiếp'));
+    if (r.res === 'group' || r.res === 'variant') {
+      logEvent({ cardId: APP.cur.id, type: 'V4', expect: it.han, typed: typed, result: 'đúng · cùng nhóm' });
+      APP.check = { kind: 'han', typed: typed, expect: it.han, ok: true, synonym: r.res === 'group', variant: r.res === 'variant' };
+      return reveal();
+    }
     APP.retry = { typed: normHan(typed), r: r.res === 'variant' ? { res: 'group' } : r };
     logEvent({ cardId: APP.cur.id, type: 'V4', expect: it.han, typed: typed, result: 'thử lại · ' + r.res });
     if (r.res === 'near' || r.res === 'dict') suggestGroup(it, normHan(typed), 'viết tay');
@@ -4040,8 +4051,21 @@ function viewGroup() {
     return rank[a.st] - rank[b.st] || ((a.w.freq || 99999) - (b.w.freq || 99999));
   });
   var title = g.dim === 'topic' ? (g.key ? topicLabel(g.key) : L('未分类', 'Unsorted', 'Chưa xếp chủ đề')) : g.dim === 'ctx' ? ctxLabel(g.key) : esc(g.key);
+  // quick pass: unopened senses of this list, tick the ones you already know
+  var closed = [], qk = '';
+  ws.forEach(function (x) { (core.sensesByWord[x.w.id] || []).forEach(function (s) { if (!s.open) closed.push({ w: x.w, s: s }); }); });
+  if (closed.length) {
+    qk = '<details class="card" id="quickKnow"><summary><b>' + L('快速标记已会', 'Quick pass: mark what you know', 'Duyệt nhanh: đánh dấu từ đã biết') + '</b> <span class="small muted">(' + closed.length + ')</span></summary>' +
+      '<p class="small muted">' + esc(LT('勾选已经会的词。它们会在 2–5 周后出现一次来确认，答错就回到学习。', 'Tick words you already know. Each comes back once in 2–5 weeks to confirm; a miss sends it back to learning.', 'Tick những nghĩa bạn đã biết. Mỗi nghĩa sẽ hiện lại một lần sau 2–5 tuần để xác nhận; sai thì quay lại học như bình thường.')) + '</p>' +
+      closed.slice(0, 200).map(function (x) {
+        return '<label class="list-item"><input type="checkbox" class="qk" value="' + esc(x.s.id) + '"> <span class="zh">' + esc(x.w.han) + '</span> <span class="small">' + py(x.s.py) + '</span><span class="grow small">' + meaning(x.s) + '</span></label>';
+      }).join('') +
+      '<div class="row" style="margin-top:8px"><button class="btn" onclick="$all(\'.qk\').forEach(function(c){c.checked=true})">' + L('全选', 'Select all', 'Chọn hết') + '</button>' +
+      '<button class="btn primary" onclick="knowSenses($all(\'.qk\').filter(function(c){return c.checked}).map(function(c){return c.value}))">' + L('标记已会', 'Mark as known', 'Đánh dấu đã biết') + '</button></div>' +
+      (closed.length > 200 ? '<p class="small muted">' + esc(LT('只显示前 200 个', 'First 200 shown', 'Chỉ hiện 200 nghĩa đầu')) + '</p>' : '') + '</details>';
+  }
   var h = '<p style="margin:0"><button class="btn ghost small" onclick="APP.group=null;viewWords()">‹ ' + L('分类', 'Browse', 'Danh mục') + '</button></p>' +
-    '<h1 style="font-size:20px">' + title + '</h1><div class="small muted">' + ws.length + ' ' + L('词', 'words', 'từ') + '</div>' + statusBar(ws.map(function (x) { return x.w; })) +
+    '<h1 style="font-size:20px">' + title + '</h1><div class="small muted">' + ws.length + ' ' + L('词', 'words', 'từ') + '</div>' + statusBar(ws.map(function (x) { return x.w; })) + qk +
     '<div class="card" style="padding-top:4px">' + ws.map(function (x) {
       var s0 = (core.sensesByWord[x.w.id] || [])[0] || {};
       return '<div class="list-item" data-word="' + esc(x.w.id) + '"><span class="zh">' + esc(x.w.han) + '</span><span class="grow small">' + meaning(s0) + '</span>' + statusChip(x.st) + '</div>';
@@ -4122,7 +4146,8 @@ function openWord(wid, opt) {
       (info ? '<div class="small muted">' + esc(info) + '</div>' : '') +
       '<div class="row small" style="margin-top:6px;gap:4px">' +
       (s.open ? '<button class="btn ghost" onclick="toggleSuspend(\'' + esc(s.id) + '\')">' + (cards.some(function (c) { return c.susp; }) ? L('恢复', 'Resume', 'Bật lại thẻ') : L('暂停', 'Suspend', 'Tạm dừng thẻ')) + '</button>'
-        : '<button class="btn primary" onclick="openOne(\'' + esc(s.id) + '\')">' + L('开始学', 'Open', 'Mở nghĩa này') + '</button>') +
+        : '<button class="btn primary" onclick="openOne(\'' + esc(s.id) + '\')">' + L('开始学', 'Open', 'Mở nghĩa này') + '</button> ' +
+          '<button class="btn" onclick="knowOne(\'' + esc(s.id) + '\')">' + L('已会', 'Already know', 'Đã biết') + '</button>') +
       '<button class="btn ghost" onclick="editSense(\'' + esc(s.id) + '\')">' + L('编辑', 'Edit', 'Sửa') + '</button></div></div>';
   }).join('') + '<div style="border-top:1px solid var(--line);padding-top:12px"><button class="btn soft" style="width:100%" onclick="addSenseModal(\'' + esc(wid) + '\')">+ ' +
     L('新义', 'Add meaning', 'Thêm nghĩa mới') + '</button></div></div>';
@@ -4149,6 +4174,16 @@ function openWord(wid, opt) {
     } catch (e) {}
   });
 }
+/** "Already know": the sense opens with cards that start as reviewed (first check in 2–5 weeks), not as new cards. */
+function knowSenses(ids) {
+  if (!ids.length) return toast(LT('未选择', 'Nothing selected', 'Chưa chọn nghĩa nào'));
+  if (!confirmTwice('know' + ids.join(), LT('再按一次确认：' + ids.length + ' 个已会', 'Tap again: mark ' + ids.length + ' as known', 'Bấm lần nữa để xác nhận ' + ids.length + ' nghĩa đã biết'))) return;
+  toast('…');
+  return call('markKnown', JSON.stringify(ids)).then(function () { return load(true); })
+    .then(function () { toast(LT('已标记 ' + ids.length + ' 个', ids.length + ' marked as known', 'Đã đánh dấu ' + ids.length + ' nghĩa đã biết — sẽ kiểm tra lại sau vài tuần')); });
+}
+function knowSelected() { knowSenses($all('.sug').filter(function (x) { return x.checked; }).map(function (x) { return x.value; })); }
+function knowOne(id) { knowSenses([id]); }
 function openOne(id) {
   call('openSenses', JSON.stringify([id])).then(function () { return load(true); }).then(function () { toast(LT('已打开', 'Opened', 'Đã mở nghĩa, thẻ mới vào hàng đợi')); });
 }
